@@ -92,7 +92,7 @@ export default function Home() {
 
       {loading && (
         <p className="text-sm text-zinc-500">
-          Driving a real browser on each platform. This takes ~10s.
+          Driving a real browser on each platform. This takes ~25s.
         </p>
       )}
 
@@ -115,7 +115,7 @@ export default function Home() {
             {data.location.lon.toFixed(4)}
           </p>
 
-          <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-4">
             {data.results.map((r) => (
               <section
                 key={r.platform}
@@ -133,9 +133,7 @@ export default function Home() {
 
                 {r.error ? (
                   <p className="rounded-md bg-zinc-100 px-3 py-6 text-center text-xs text-zinc-500 dark:bg-zinc-800">
-                    {r.error.includes("not implemented")
-                      ? "Not wired up yet"
-                      : "Unavailable right now"}
+                    Unavailable right now
                   </p>
                 ) : r.products.length === 0 ? (
                   <p className="px-3 py-6 text-center text-xs text-zinc-500">No results</p>

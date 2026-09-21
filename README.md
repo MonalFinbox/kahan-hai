@@ -37,7 +37,7 @@ cp .env.example .env   # then edit DEFAULT_LAT / DEFAULT_LON
 | Blinkit | Working | Intercepts `POST /v1/layout/search` |
 | Swiggy Instamart | Working | Intercepts `POST /api/instamart/search/v2` |
 | Zepto | Working | Intercepts the `bff-gateway` search API |
-| Flipkart Minutes | **Not implemented** | Needs its address-picker flow scripted, see `internal/adapter/minutes` |
+| Flipkart Minutes | Working | Drives the address picker, then intercepts `POST /api/4/page/fetch` |
 | BigBasket | Not attempted | Akamai blocks datacenter IPs at the edge |
 | Amazon Now | Not attempted | SSR-only, strongest bot detection of the set |
 
@@ -71,6 +71,14 @@ its own column while the others render normally.
 Every platform resolves a lat/lon to a nearby dark store server-side, so results
 are only valid for one point. There is no such thing as city-wide availability,
 which is also why nothing can be pre-crawled and cached.
+
+Three of the four accept the coordinates we override in the browser and get on
+with it. Flipkart Minutes does not: until a store is bound to the session it
+redirects every Minutes URL to an address picker. The adapter clicks that
+picker's "Use my current location", which reads the same overridden
+coordinates, so the location still comes from `DEFAULT_LAT`/`DEFAULT_LON`. It
+just takes a click and a few extra seconds to get there. Minutes is
+correspondingly the slowest adapter.
 
 ### Price history
 

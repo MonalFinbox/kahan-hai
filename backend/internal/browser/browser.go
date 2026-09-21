@@ -131,6 +131,9 @@ type Session struct {
 	mu       sync.Mutex
 	captured map[string][][]byte
 	patterns []string
+	// pending maps an in-flight request we care about to the pattern it matched,
+	// so its body can be read once loading finishes.
+	pending map[network.RequestID]string
 }
 
 // NewSession opens a tab, grants geolocation for origin, and pins the device
@@ -150,7 +153,11 @@ func (p *Pool) NewSession(ctx context.Context, origin string, lat, lon float64) 
 		cancel = func() { cancelDeadline(); cancelTab() }
 	}
 
-	s := &Session{ctx: tabCtx, cancel: cancel, captured: map[string][][]byte{}}
+	s := &Session{
+		ctx: tabCtx, cancel: cancel,
+		captured: map[string][][]byte{},
+		pending:  map[network.RequestID]string{},
+	}
 
 	if err := chromedp.Run(tabCtx,
 		network.Enable(),
@@ -190,42 +197,64 @@ func (s *Session) Capture(pattern string) {
 	s.patterns = append(s.patterns, pattern)
 }
 
+// listen records response bodies for the registered patterns.
+//
+// Bodies are read on Network.loadingFinished rather than on responseReceived.
+// A response's body is not readable when its headers land, so reading on
+// responseReceived means guessing at a delay, and guessing costs bodies:
+// Chrome evicts them from its network buffer, and a large response that is
+// still being fetched when the guess expires is simply lost. loadingFinished is
+// the event that says the body is complete, so reading there is both correct
+// and as early as possible.
 func (s *Session) listen() {
 	chromedp.ListenTarget(s.ctx, func(ev interface{}) {
-		e, ok := ev.(*network.EventResponseReceived)
-		if !ok {
-			return
-		}
-		s.mu.Lock()
-		var match string
-		for _, p := range s.patterns {
-			if strings.Contains(e.Response.URL, p) {
-				match = p
-				break
+		switch e := ev.(type) {
+		case *network.EventResponseReceived:
+			if match := s.match(e.Response.URL); match != "" {
+				s.mu.Lock()
+				s.pending[e.RequestID] = match
+				s.mu.Unlock()
 			}
-		}
-		s.mu.Unlock()
-		if match == "" {
-			return
-		}
 
-		id := e.RequestID
-		go func() {
-			// The body is not readable the instant the response headers land.
-			time.Sleep(1200 * time.Millisecond)
-			c := chromedp.FromContext(s.ctx)
-			if c == nil || c.Target == nil {
-				return
-			}
-			body, err := network.GetResponseBody(id).Do(cdp.WithExecutor(s.ctx, c.Target))
-			if err != nil || len(body) == 0 {
-				return
-			}
+		case *network.EventLoadingFinished:
 			s.mu.Lock()
-			s.captured[match] = append(s.captured[match], body)
+			match, ok := s.pending[e.RequestID]
+			delete(s.pending, e.RequestID)
 			s.mu.Unlock()
-		}()
+			if !ok {
+				return
+			}
+
+			// Off the event goroutine: this makes a CDP call of its own, and
+			// blocking here would stall every later event.
+			go s.fetchBody(e.RequestID, match)
+		}
 	})
+}
+
+func (s *Session) match(url string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.patterns {
+		if strings.Contains(url, p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func (s *Session) fetchBody(id network.RequestID, match string) {
+	c := chromedp.FromContext(s.ctx)
+	if c == nil || c.Target == nil {
+		return
+	}
+	body, err := network.GetResponseBody(id).Do(cdp.WithExecutor(s.ctx, c.Target))
+	if err != nil || len(body) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.captured[match] = append(s.captured[match], body)
+	s.mu.Unlock()
 }
 
 // Navigate loads url and waits settle for in-flight XHRs to complete.
@@ -263,6 +292,72 @@ func (s *Session) Payloads(pattern string) [][]byte {
 	out := make([][]byte, len(s.captured[pattern]))
 	copy(out, s.captured[pattern])
 	return out
+}
+
+// ClickXPath clicks the first node matching an XPath expression, waiting up to
+// timeout for it to appear.
+//
+// Real clicks, not dispatched events: Flipkart's picker is react-native-web,
+// whose responder system ignores synthetic MouseEvents but reacts normally to
+// input that arrives through the CDP input domain.
+func (s *Session) ClickXPath(xpath string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
+	defer cancel()
+	if err := chromedp.Run(ctx,
+		chromedp.WaitVisible(xpath, chromedp.BySearch),
+		chromedp.Click(xpath, chromedp.BySearch),
+	); err != nil {
+		return fmt.Errorf("click %q: %w", xpath, err)
+	}
+	return nil
+}
+
+// HasXPath reports whether a node matching xpath is present right now.
+func (s *Session) HasXPath(xpath string) bool {
+	var n []*cdp.Node
+	err := chromedp.Run(s.ctx, chromedp.Nodes(xpath, &n, chromedp.BySearch, chromedp.AtLeast(0)))
+	return err == nil && len(n) > 0
+}
+
+// WaitPayload blocks until a body for pattern is captured, or maxWait elapses.
+// Reports whether anything arrived.
+func (s *Session) WaitPayload(pattern string, maxWait time.Duration) bool {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		if len(s.Payloads(pattern)) > 0 {
+			return true
+		}
+		select {
+		case <-s.ctx.Done():
+			return false
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return len(s.Payloads(pattern)) > 0
+}
+
+// ScrollToBottom jumps to the end of the page, which is what triggers the next
+// batch on an infinite-scroll results page.
+//
+// It scrolls the window and, separately, the tallest overflowing element on the
+// page. The second part is what actually does the work on react-native-web
+// apps, where the document itself never scrolls and the list lives inside its
+// own scroll view. That element is found by geometry rather than by selector
+// because these apps ship hashed class names that change on every deploy.
+func (s *Session) ScrollToBottom() error {
+	const js = `(() => {
+		window.scrollTo(0, document.body.scrollHeight);
+		let best = null, bestOverflow = 200;
+		for (const el of document.querySelectorAll('div')) {
+			const overflow = el.scrollHeight - el.clientHeight;
+			if (overflow > bestOverflow) { best = el; bestOverflow = overflow; }
+		}
+		if (!best) return false;
+		best.scrollTop = best.scrollHeight;
+		return true;
+	})()`
+	var scrolled bool
+	return chromedp.Run(s.ctx, chromedp.Evaluate(js, &scrolled))
 }
 
 // Eval runs JS in the page and decodes the result into out.
