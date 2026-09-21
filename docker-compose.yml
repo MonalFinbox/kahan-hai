@@ -1,0 +1,56 @@
+services:
+  # Chrome runs as its own service. The adapters drive real browser sessions,
+  # so keeping the engine separate means the Go image stays small and a wedged
+  # browser can be restarted without touching the API.
+  chrome:
+    image: chromedp/headless-shell:latest
+    container_name: kahan-hai-chrome
+    init: true
+    # Large pages exhaust the default 64MB of shared memory.
+    shm_size: 1gb
+    # The image's run.sh already binds the debugging port (socat 9222 -> 9223)
+    # and passes --no-sandbox. Anything here is appended to that command, so it
+    # must not repeat those flags or Chrome fails to bind.
+    command:
+      - --disable-dev-shm-usage
+      - --disable-blink-features=AutomationControlled
+      - --window-size=1440,900
+    expose:
+      - "9222"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    container_name: kahan-hai-api
+    depends_on:
+      - chrome
+    environment:
+      ADDR: ":8080"
+      DB_PATH: /data/kahan-hai.db
+      CHROME_URL: http://chrome:9222
+      # Your delivery point. Override in .env rather than editing this file.
+      DEFAULT_LAT: ${DEFAULT_LAT:-28.6315}
+      DEFAULT_LON: ${DEFAULT_LON:-77.2167}
+      ADAPTER_TIMEOUT_SECONDS: ${ADAPTER_TIMEOUT_SECONDS:-45}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - kahan-hai-data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+    container_name: kahan-hai-web
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  # Named volume: the price history survives `docker compose down` and rebuilds.
+  kahan-hai-data:
