@@ -1,7 +1,7 @@
 # kahan hai
 
-Search a product once, see what it costs on every quick-commerce app that
-delivers to your door.
+Search a product once, see which quick-commerce apps actually have it, and
+what each of them charges.
 
 | | |
 |---|---|
@@ -79,6 +79,25 @@ picker's "Use my current location", which reads the same overridden
 coordinates, so the location still comes from `DEFAULT_LAT`/`DEFAULT_LON`. It
 just takes a click and a few extra seconds to get there. Minutes is
 correspondingly the slowest adapter.
+
+### Results ordering
+
+Availability is the first question, not price. These platforms run fuzzy search
+over one dark store's inventory: ask for "amul gold 1l" and a store that does
+not stock it answers with whatever it does have, so the same query returns a
+different set on every app. Which app has your thing at all is the answer you
+need before any price is worth reading.
+
+So each column is shown in **that platform's own relevance order**, untouched.
+Re-sorting by price actively destroys the answer: the cheapest loosely related
+item floats to the top while the thing you searched for sinks out of the
+visible rows. Out-of-stock items keep their position too, marked in place, so
+position always means relevance and nothing else.
+
+For the same reason nothing here declares a single cheapest-anywhere winner.
+There is no product matching across platforms, so a "winner" would be comparing
+a 200ml sachet on one app against a 1L carton on another. Eight rows per app
+sit side by side with photos and prices, and the comparison is yours to make.
 
 ### Price history
 
