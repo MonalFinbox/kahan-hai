@@ -12,8 +12,11 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
@@ -134,6 +137,10 @@ type Session struct {
 	// pending maps an in-flight request we care about to the pattern it matched,
 	// so its body can be read once loading finishes.
 	pending map[network.RequestID]string
+
+	// host labels dumped payload files, so a dump directory from a four-way
+	// fan-out is still readable.
+	host string
 }
 
 // NewSession opens a tab, grants geolocation for origin, and pins the device
@@ -157,6 +164,7 @@ func (p *Pool) NewSession(ctx context.Context, origin string, lat, lon float64) 
 		ctx: tabCtx, cancel: cancel,
 		captured: map[string][][]byte{},
 		pending:  map[network.RequestID]string{},
+		host:     hostOf(origin),
 	}
 
 	if err := chromedp.Run(tabCtx,
@@ -255,6 +263,58 @@ func (s *Session) fetchBody(id network.RequestID, match string) {
 	s.mu.Lock()
 	s.captured[match] = append(s.captured[match], body)
 	s.mu.Unlock()
+
+	s.dump(match, body)
+}
+
+// dump writes one captured payload to KH_DUMP_DIR when that is set.
+//
+// Every adapter failure in this codebase eventually reduces to "the JSON moved":
+// a widget renamed, a field nested one level deeper, a response that never
+// arrived at all. Without the raw bodies that is guesswork, because by the time
+// an adapter reports "no products parsed" the browser is closed and the
+// evidence is gone. This is the cheapest possible hook, since fetchBody is the
+// one place every capture passes through, and it costs nothing when the
+// variable is unset.
+//
+//	KH_DUMP_DIR=/tmp/kh make probe P=minutes Q="maggi noodles"
+//	jq . /tmp/kh/www.flipkart.com-api-4-page-fetch-001.json
+func (s *Session) dump(match string, body []byte) {
+	dir := os.Getenv("KH_DUMP_DIR")
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	name := fmt.Sprintf("%s-%s-%03d.json", s.host, slug(match), dumpSeq.Add(1))
+	_ = os.WriteFile(filepath.Join(dir, name), body, 0o644)
+}
+
+// dumpSeq orders the files across a parallel fan-out, where four sessions write
+// into the same directory at once.
+var dumpSeq atomic.Int64
+
+// slug turns a URL pattern into something safe for a filename.
+func slug(s string) string {
+	s = strings.Trim(s, "/")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.':
+			return r
+		default:
+			return '-'
+		}
+	}, s)
+}
+
+// hostOf reduces an origin to its hostname, falling back to a slug of whatever
+// was passed when it does not parse as a URL.
+func hostOf(origin string) string {
+	if u, err := url.Parse(origin); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return slug(origin)
 }
 
 // Navigate loads url and waits settle for in-flight XHRs to complete.

@@ -118,6 +118,31 @@ going through the server:
 ```bash
 make probe P=blinkit Q="amul milk"
 make probe-headful P=zepto      # watch the browser do it
+make probe-dump P=minutes Q="maggi"  # save every intercepted payload to ./dump
+```
+
+Every adapter failure eventually reduces to "the JSON moved": a widget renamed,
+a field nested one level deeper, a response that never arrived. By the time an
+adapter reports `no products parsed` the browser is gone and so is the
+evidence, which is what `probe-dump` exists to keep:
+
+```bash
+make probe-dump P=minutes Q="maggi noodles"
+jq '.RESPONSE.slots[].widget.type' dump/www.flipkart.com-api-4-page-fetch-001.json
+```
+
+It is the `KH_DUMP_DIR` environment variable underneath, read in the one place
+every capture passes through, so it works for the server too:
+
+```bash
+KH_DUMP_DIR=/tmp/kh make run-api
+```
+
+A saved payload also makes a good test fixture: parsing is a pure function, so
+a captured response turns a 25 second live check into a millisecond one.
+
+```bash
+make test
 ```
 
 Each adapter is one file behind one interface (`adapter.Adapter`), so a broken
