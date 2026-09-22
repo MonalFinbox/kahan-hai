@@ -88,6 +88,15 @@ probe: ## Run one adapter directly: make probe P=blinkit Q="amul milk"
 probe-headful: ## Same as probe but shows the browser window (for debugging)
 	cd $(BACKEND) && go run ./cmd/probe -platform "$(P)" -q "$(Q)" -lat $(LAT) -lon $(LON) -headful
 
+# When an adapter parses nothing, the question is always "what did the platform
+# actually send?". This writes every intercepted response to ./dump so it can be
+# read, diffed against a working capture, or turned into a test fixture.
+.PHONY: probe-dump
+probe-dump: ## Probe and save every intercepted JSON payload to ./dump
+	@rm -rf dump && mkdir -p dump
+	cd $(BACKEND) && KH_DUMP_DIR=$(CURDIR)/dump go run ./cmd/probe -platform "$(P)" -q "$(Q)" -lat $(LAT) -lon $(LON)
+	@echo; ls -la dump
+
 ##@ Code quality
 
 .PHONY: test

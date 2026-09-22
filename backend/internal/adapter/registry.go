@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"time"
 )
@@ -57,14 +56,14 @@ func (r *Registry) SearchAll(ctx context.Context, query string, loc Location) []
 			if res.Products == nil {
 				res.Products = []Product{}
 			}
-			// Cheapest in-stock option first: that is the question being asked.
-			sort.SliceStable(res.Products, func(x, y int) bool {
-				px, py := res.Products[x], res.Products[y]
-				if px.InStock != py.InStock {
-					return px.InStock
-				}
-				return px.PricePaise < py.PricePaise
-			})
+			// Deliberately left in the platform's own order.
+			//
+			// Each platform ran its own relevance ranking against the query, and
+			// that ranking is the best answer available to "what did this app
+			// think you meant". Re-sorting by price destroys it: the cheapest
+			// loosely related item floats to the top and the thing actually
+			// searched for sinks out of the visible rows. Availability comes
+			// first, price is read off the results.
 			results[i] = res
 		}(i, a)
 	}

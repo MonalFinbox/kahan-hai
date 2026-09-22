@@ -1,7 +1,7 @@
 # kahan hai
 
-Search a product once, see what it costs on every quick-commerce app that
-delivers to your door.
+Search a product once, see which quick-commerce apps actually have it, and
+what each of them charges.
 
 | | |
 |---|---|
@@ -80,6 +80,25 @@ coordinates, so the location still comes from `DEFAULT_LAT`/`DEFAULT_LON`. It
 just takes a click and a few extra seconds to get there. Minutes is
 correspondingly the slowest adapter.
 
+### Results ordering
+
+Availability is the first question, not price. These platforms run fuzzy search
+over one dark store's inventory: ask for "amul gold 1l" and a store that does
+not stock it answers with whatever it does have, so the same query returns a
+different set on every app. Which app has your thing at all is the answer you
+need before any price is worth reading.
+
+So each column is shown in **that platform's own relevance order**, untouched.
+Re-sorting by price actively destroys the answer: the cheapest loosely related
+item floats to the top while the thing you searched for sinks out of the
+visible rows. Out-of-stock items keep their position too, marked in place, so
+position always means relevance and nothing else.
+
+For the same reason nothing here declares a single cheapest-anywhere winner.
+There is no product matching across platforms, so a "winner" would be comparing
+a 200ml sachet on one app against a 1L carton on another. Eight rows per app
+sit side by side with photos and prices, and the comparison is yours to make.
+
 ### Price history
 
 Every search writes each result to SQLite with a timestamp. Nothing reads it
@@ -99,6 +118,31 @@ going through the server:
 ```bash
 make probe P=blinkit Q="amul milk"
 make probe-headful P=zepto      # watch the browser do it
+make probe-dump P=minutes Q="maggi"  # save every intercepted payload to ./dump
+```
+
+Every adapter failure eventually reduces to "the JSON moved": a widget renamed,
+a field nested one level deeper, a response that never arrived. By the time an
+adapter reports `no products parsed` the browser is gone and so is the
+evidence, which is what `probe-dump` exists to keep:
+
+```bash
+make probe-dump P=minutes Q="maggi noodles"
+jq '.RESPONSE.slots[].widget.type' dump/www.flipkart.com-api-4-page-fetch-001.json
+```
+
+It is the `KH_DUMP_DIR` environment variable underneath, read in the one place
+every capture passes through, so it works for the server too:
+
+```bash
+KH_DUMP_DIR=/tmp/kh make run-api
+```
+
+A saved payload also makes a good test fixture: parsing is a pure function, so
+a captured response turns a 25 second live check into a millisecond one.
+
+```bash
+make test
 ```
 
 Each adapter is one file behind one interface (`adapter.Adapter`), so a broken
